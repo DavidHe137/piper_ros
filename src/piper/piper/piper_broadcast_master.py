@@ -40,7 +40,7 @@ class PiperRosNode(Node):
         self.get_logger().info(f"gripper_exist is {self.gripper_exist}")
         self.get_logger().info(f"gripper_val_mutiple is {self.gripper_val_mutiple}")
         # Publishers
-        self.joint_pub = self.create_publisher(JointState, 'joint_states_single', 1)
+        # self.joint_pub = self.create_publisher(JointState, 'joint_states_single', 1)
         self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_ctrl', 1)
         self.arm_status_pub = self.create_publisher(PiperStatusMsg, 'arm_status', 1)
         self.end_pose_pub = self.create_publisher(Pose, 'end_pose', 1)
@@ -174,7 +174,7 @@ class PiperRosNode(Node):
         self.joint_states.velocity = [vel_0, vel_1, vel_2, vel_3, vel_4, vel_5]
         self.joint_states.effort = [effort_0, effort_1, effort_2, effort_3, effort_4, effort_5, effort_6]
         # 发布所有消息
-        self.joint_pub.publish(self.joint_states)
+        # self.joint_pub.publish(self.joint_states)
         self.joint_states_pub.publish(self.joint_states)
 
     def PublishArmCtrlAndGripper(self):
