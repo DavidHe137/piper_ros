@@ -1,0 +1,19 @@
+ros2 run piper piper_broadcast_teleop --ros-args \
+  -p can_port:=can0 \
+  -p auto_enable:=true \
+  -p gripper_exist:=true \
+  -p gripper_val_mutiple:=1 \
+  -p reset_joint1:=0.005128536 \
+  -p reset_joint2:=0.943266856 \
+  -p reset_joint3:=-0.996261728 \
+  -p reset_joint4:=0.0 \
+  -p reset_joint5:=1.2188995 \
+  -p reset_joint6:=-0.040068868 \
+  -p reset_gripper:=0.0 \
+  -p reset_motion_speed:=30 \
+  -p reset_gripper_effort:=1.0 \
+  -p reset_hold_seconds:=4.0 \
+  -p reset_command_hz:=10.0 \
+  -p wait_for_enable_timeout:=10.0 \
+  -p startup_delay_seconds:=0.5 \
+  -p prompt_to_continue:=true

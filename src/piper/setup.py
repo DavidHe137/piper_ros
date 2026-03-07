@@ -31,6 +31,7 @@ setup(
             'piper_ms_ctrl = piper.piper_start_ms_node:main',
             'piper_read_master = piper.piper_read_master_node:main',
             'piper_broadcast_master = piper.piper_broadcast_master:main',
+            'piper_broadcast_teleop = piper.piper_broadcast_teleop:main',
         ],
     },
 )

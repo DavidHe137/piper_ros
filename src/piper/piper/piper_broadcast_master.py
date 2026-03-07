@@ -243,6 +243,8 @@ class PiperRosNode(Node):
             if self.gripper_exist:
                 self.piper.GripperCtrl(abs(gripper), 1000, 0x01, 0)
             self.piper.MotionCtrl_2(0x01, 0x00, 50)
+        else:
+            self.get_logger().info(f"Master arm is not enabled, cannot control the arm")
 
     def joint_callback(self, joint_data):
         """Callback function for joint angles
@@ -270,6 +272,7 @@ class PiperRosNode(Node):
 
         # 控制电机速度
         if self.GetEnableFlag():
+            
             if joint_data.velocity != []:
                 all_zeros = all(v == 0 for v in joint_data.velocity)
             else:
@@ -285,6 +288,8 @@ class PiperRosNode(Node):
             else:
                 self.piper.MotionCtrl_2(0x01, 0x01, 30)
 
+            self.get_logger().info(f"joint_pos: {joint_positions}")
+            # breakpoint()
             # 使用关节名称来动态控制关节
             self.piper.JointCtrl(
                 joint_positions.get('joint1', 0),
