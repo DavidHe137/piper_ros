@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'piper_single_ctrl = piper.piper_ctrl_single_node:main',
+            'piper_single_ctrl_v2 = piper.piper_ctrl_single_node_v2:main',
             'piper_ms_ctrl = piper.piper_start_ms_node:main',
             'piper_read_master = piper.piper_read_master_node:main',
             'piper_broadcast_master = piper.piper_broadcast_master:main',
