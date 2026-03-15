@@ -21,6 +21,10 @@ from scipy.spatial.transform import Rotation
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from geometry_msgs.msg import PoseStamped
+
+import tf2_ros
+
 
 from piper_sdk.kinematics.piper_fk import C_PiperForwardKinematics
 from oculus_reader import OculusReader
@@ -125,6 +129,7 @@ class PiperQuestTeleopNode(Node):
         )
 
         self._pub = self.create_publisher(JointState, 'joint_states', 1)
+        self._pub_cartesian_target = self.create_publisher(PoseStamped, 'ee_target_pose', 1)
         self._ik = PiperIK(ori_weight=self.ori_weight)
 
         # Live state
@@ -132,12 +137,15 @@ class PiperQuestTeleopNode(Node):
         self._gripper_mm = self.reset_gripper_mm
         self._current_speed = self.speed_pct
 
-        # Calibration (updated by RJ press)
-        self._R_cal = np.eye(3)   # robot-frame rotation at calibration moment
+        # Calibration: inverse of the raw Quest rotation at the moment of locking.
+        # While _reset_orientation=True this is updated every loop tick (live tracking).
+        # It is locked (frozen) when the user presses RJ or holds the trigger.
+        self._reset_orientation: bool = True
+        self._vr_to_global: np.ndarray = np.eye(3)  # inv(raw_rot) in Quest frame
 
         # Teleoperation snapshots (updated on trigger rising edge)
-        self._q0_pos = np.zeros(3)    # controller pos at trigger press (robot frame, m)
-        self._q0_rot = np.eye(3)      # controller rot at trigger press (robot frame)
+        self._q0_pos = np.zeros(3)    # controller pos at trigger press (calibrated frame, m)
+        self._q0_rot = np.eye(3)      # controller rot at trigger press (calibrated frame)
         self._arm0_xyz = np.zeros(3)  # arm EE xyz at trigger press (m)
         self._arm0_rot = np.eye(3)    # arm EE rot at trigger press
 
@@ -154,6 +162,23 @@ class PiperQuestTeleopNode(Node):
         self.get_logger().info("Connecting to Quest via ADB …")
         self._oculus = OculusReader()
         self.get_logger().info("Quest connected.  Press RJ to calibrate.")
+
+        # set the initial target pose
+        tf_buffer = tf2_ros.Buffer()
+        listener = tf2_ros.TransformListener(tf_buffer, self)
+
+        target_frame = 'link6'
+        source_frame = 'base_link'
+        trans = None
+    
+
+        if not trans:
+            self.get_logger().error(f"Transform not available:")
+            self.target_xyz_m = np.zeros(3, dtype=float)
+            self.target_rot = np.eye(3, dtype=float)
+        else:
+            self.target_xyz_m = np.array([trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z])
+            self.target_rot = Rotation.from_quat([trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]).as_matrix()
 
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -196,6 +221,25 @@ class PiperQuestTeleopNode(Node):
         msg.effort   = [0.0] * 7
         return msg
 
+    def _make_cartesian_target_msg(self, xyz_m: np.ndarray, rpy_rad: np.ndarray) -> PoseStamped:
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        msg.pose.position.x = xyz_m[0]
+        msg.pose.position.y = xyz_m[1]
+        msg.pose.position.z = xyz_m[2]
+        quat = Rotation.from_matrix(rpy_rad).as_quat()
+        self.get_logger().info(f"quat: {quat}")
+        self.get_logger().info(f"rpy_rad: {rpy_rad}")
+        self.get_logger().info(f"xyz_m: {xyz_m}")
+
+        
+        msg.pose.orientation.x = quat[0]
+        msg.pose.orientation.y = quat[1]
+        msg.pose.orientation.z = quat[2]
+        msg.pose.orientation.w = quat[3]
+        return msg
+
     def _publish_joints_for(self, joints: np.ndarray, gripper_mm: float,
                             speed: int, duration_s: float, rate_hz: float):
         self.get_logger().info(
@@ -209,6 +253,17 @@ class PiperQuestTeleopNode(Node):
             self._pub.publish(msg)
             time.sleep(dt)
         self.get_logger().info("Reset done.")
+
+    # def _get_transform(self, target_frame: str, source_frame: str) -> TransformStamped:
+    #     try:
+    #         trans = self._tf_buffer.lookup_transform(target_frame, source_frame, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
+    #     except Exception as e:
+    #         self.get_logger().error(f"Transform not available: {e}")
+    #         trans = None
+    #     if trans:
+    #         self.target_xyz_m = np.array([trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z])
+    #         self.target_rot = Rotation.from_quat([trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w]).as_matrix()
+ 
 
     # ── Main control loop ─────────────────────────────────────────────────────
 
@@ -233,10 +288,27 @@ class PiperQuestTeleopNode(Node):
                 time.sleep(dt)
                 continue
 
-            # ── Remap Quest pose into robot base frame ────────────────────────
-            T = transforms['r']                                    # 4×4, metres, OpenXR
-            q_pos = R_QUEST_TO_ROBOT @ T[:3, 3]                   # m, robot frame
-            q_rot = R_QUEST_TO_ROBOT @ T[:3, :3] @ R_QUEST_TO_ROBOT.T  # robot frame
+            # ── Extract raw Quest pose ────────────────────────────────────────
+            T = transforms['r']           # 4×4, metres, OpenXR
+            raw_rot = T[:3, :3]
+            raw_pos = T[:3, 3]
+
+            # ── Live calibration tracking ─────────────────────────────────────
+            # While _reset_orientation is True we continuously update the inverse
+            # of the raw controller rotation.  The calibration locks when the user
+            # presses RJ or activates the trigger (matching quest_teleop_droid.py).
+            if self._reset_orientation:
+                try:
+                    self._vr_to_global = np.linalg.inv(raw_rot)
+                except np.linalg.LinAlgError:
+                    self._vr_to_global = np.eye(3)
+
+            # Apply full transform chain:
+            #   R_QUEST_TO_ROBOT  – axis reorder (Quest → robot convention)
+            #   _vr_to_global     – locked calibration inverse
+            #   raw_rot / raw_pos – current Quest measurement
+            q_pos = R_QUEST_TO_ROBOT @ (self._vr_to_global @ raw_pos)
+            q_rot = R_QUEST_TO_ROBOT @ (self._vr_to_global @ raw_rot) @ R_QUEST_TO_ROBOT.T
 
             # ── A: return to home ─────────────────────────────────────────────
             if cur['A'] and not self._prev['A']:
@@ -248,16 +320,34 @@ class PiperQuestTeleopNode(Node):
             elif not cur['A'] and self._prev['A']:
                 self._current_speed = self.speed_pct
 
-            # ── RJ: calibration ───────────────────────────────────────────────
-            # Point the controller along the robot's +X axis and press joystick.
-            # This records the controller's orientation as a reference frame so
-            # that subsequent translation/rotation deltas map correctly.
+            # ── RJ: calibration lock / unlock ─────────────────────────────────
+            # Point the controller along the robot's +X axis, then press the
+            # joystick to lock that orientation as "forward".  Press again to
+            # re-arm (resume live tracking so you can re-calibrate).
             if cur['RJ'] and not self._prev['RJ']:
-                self._R_cal = q_rot.copy()
-                trigger_active = False   # force re-snapshot on next trigger press
-                self.get_logger().info(f"Calibrated.  R_cal:\n{self._R_cal.round(3)}")
+                if not self._reset_orientation:
+                    # Already locked — toggle back to live tracking
+                    self._reset_orientation = True
+                    self.get_logger().info("Calibration re-armed (live tracking)")
+                else:
+                    # Lock the current inverse rotation as calibration
+                    self._reset_orientation = False
+                    trigger_active = False   # force re-snapshot on next trigger press
+                    self.get_logger().info(
+                        f"Calibrated.  vr_to_global:\n{self._vr_to_global.round(3)}"
+                    )
 
             # ── RTr: teleoperation ────────────────────────────────────────────
+            # Trigger active → lock calibration so it doesn't drift mid-motion.
+            if cur['RTr']:
+                self._reset_orientation = False
+            else:
+                # Trigger released → re-arm live tracking so the user can
+                # re-calibrate by just moving the controller and pressing RJ.
+                if trigger_active:
+                    self._reset_orientation = True
+                trigger_active = False
+
             rising_edge = cur['RTr'] and not self._prev['RTr']
             if rising_edge:
                 # Snapshot controller and arm pose at the moment of press
@@ -266,18 +356,16 @@ class PiperQuestTeleopNode(Node):
                 trigger_active = True
                 self.get_logger().info("Trigger: teleoperation engaged")
 
-            if not cur['RTr']:
-                trigger_active = False
-
             if trigger_active:
-                # Translate position delta from controller frame to robot frame
-                delta_pos_m = self._R_cal @ (q_pos - self._q0_pos) * self.pos_scale
+                # Calibration is already baked into q_pos / q_rot, so deltas are
+                # computed directly in the calibrated robot frame.
+                delta_pos_m = (q_pos - self._q0_pos) * self.pos_scale
                 target_xyz_m = self._arm0_xyz + delta_pos_m
+                self.target_xyz_m = target_xyz_m
 
-                # Rotate orientation delta into robot frame
-                delta_rot = self._R_cal @ (q_rot @ self._q0_rot.T) @ self._R_cal.T
+                delta_rot = q_rot @ self._q0_rot.T
                 target_rot = delta_rot @ self._arm0_rot
-
+                self.target_rot = target_rot
                 self._joints = self._ik.solve(target_xyz_m, target_rot, self._joints)
 
             # ── Gripper ───────────────────────────────────────────────────────
@@ -290,6 +378,10 @@ class PiperQuestTeleopNode(Node):
             # ── Publish ───────────────────────────────────────────────────────
             self._pub.publish(
                 self._make_msg(self._joints, self._gripper_mm, self._current_speed)
+            )
+
+            self._pub_cartesian_target.publish(
+                self._make_cartesian_target_msg(self.target_xyz_m, self.target_rot)
             )
 
             self._prev = cur

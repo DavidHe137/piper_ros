@@ -41,8 +41,9 @@ class PiperRosNode(Node):
         # Publishers
         self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_ctrl', 1)
         self.arm_status_pub = self.create_publisher(PiperStatusMsg, 'arm_status', 1)
-        self.end_pose_pub = self.create_publisher(Pose, 'end_pose', 1)
+        # self.end_pose_pub = self.create_publisher(Pose, 'end_pose', 1)
         self.joint_states_pub = self.create_publisher(JointState, 'joint_states', 1)
+        # self.pos_cmd_pub = self.create_publisher(PosCmd, 'pos_cmd', 1)
         # Service
         self.motor_srv = self.create_service(Enable, 'enable_srv', self.handle_enable_service)
         # Joint
@@ -64,7 +65,7 @@ class PiperRosNode(Node):
         self.piper.ConnectPort()
 
         # Subscriptions
-        self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
+        # self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
         self.create_subscription(Bool, 'enable_flag', self.enable_callback, 1)
 
         self.publisher_thread = threading.Thread(target=self.publish_thread)
@@ -105,8 +106,8 @@ class PiperRosNode(Node):
             self.PublishArmState()
             self.PublishArmJointAndGripper()
             self.PublishArmCtrlAndGripper()
-            self.PublishArmEndPose()
-
+            # self.PublishArmEndPose()
+            # self.PublishPosCmd()
             rate.sleep()
 
     def PublishArmState(self):
@@ -188,10 +189,29 @@ class PiperRosNode(Node):
         endpos.orientation.z = quaternion[2]
         endpos.orientation.w = quaternion[3]
         self.end_pose_pub.publish(endpos)
+    
+    def PublishPosCmd(self):
+        x =     self.piper.GetArmEndPoseMsgs().end_pose.X_axis / 1000000
+        y =     self.piper.GetArmEndPoseMsgs().end_pose.Y_axis / 1000000
+        z =     self.piper.GetArmEndPoseMsgs().end_pose.Z_axis / 1000000
+        roll = math.radians(self.piper.GetArmEndPoseMsgs().end_pose.RX_axis / 1000)
+        pitch = math.radians(self.piper.GetArmEndPoseMsgs().end_pose.RY_axis / 1000)
+        yaw = math.radians(self.piper.GetArmEndPoseMsgs().end_pose.RZ_axis / 1000)
+
+        pos_cmd = PosCmd()
+        pos_cmd.x = x
+        pos_cmd.y = y
+        pos_cmd.z = z
+        pos_cmd.roll = roll
+        pos_cmd.pitch = pitch
+        pos_cmd.yaw = yaw
+        pos_cmd.gripper = self.piper.GetArmGripperMsgs().gripper_state.grippers_angle / 1000000
+        self.get_logger().info(f"pos_cmd: {pos_cmd}")
+        self.pos_cmd_pub.publish(pos_cmd)
 
     def pos_callback(self, pos_data):
         """Callback function for subscribing to the end effector pose"""
-        factor = 180 / 3.1415926
+        factor = 180 / 3.1415926 # rad to degree
         self.get_logger().info(f"Received PosCmd:")
         self.get_logger().info(f"x: {pos_data.x}")
         self.get_logger().info(f"y: {pos_data.y}")
@@ -219,6 +239,10 @@ class PiperRosNode(Node):
                 gripper = 0
             if self.gripper_exist:
                 self.piper.GripperCtrl(abs(gripper), 1000, 0x01, 0)
+            self.piper.MotionCtrl_2(0x01, 0x00, 50)
+            self.piper.MotionCtrl_2(0x01, 0x00, 50)
+            self.piper.MotionCtrl_2(0x01, 0x00, 50)
+            self.piper.MotionCtrl_2(0x01, 0x00, 50)
             self.piper.MotionCtrl_2(0x01, 0x00, 50)
 
     def joint_callback(self, joint_data):

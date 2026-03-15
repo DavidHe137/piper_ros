@@ -33,6 +33,7 @@ setup(
             'piper_broadcast_master = piper.piper_broadcast_master:main',
             'piper_broadcast_master_v2 = piper.piper_broadcast_master_v2:main',
             'piper_quest_teleop = piper.piper_quest_teleop:main',
+            'piper_teleop_loop = piper.piper_teleop_loop:main',
         ],
     },
 )
