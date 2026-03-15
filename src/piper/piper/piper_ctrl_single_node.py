@@ -65,7 +65,7 @@ class PiperRosNode(Node):
         self.piper.ConnectPort()
 
         # Start subscription thread
-        self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
+        # self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
         self.create_subscription(JointState, 'joint_ctrl_single', self.joint_callback, 1)
         self.create_subscription(Bool, 'enable_flag', self.enable_callback, 1)
 
@@ -223,6 +223,7 @@ class PiperRosNode(Node):
         self.get_logger().info(f"gripper: {pos_data.gripper}")
         self.get_logger().info(f"mode1: {pos_data.mode1}")
         self.get_logger().info(f"mode2: {pos_data.mode2}")
+        self.get_logger().info(f"self.get_enable_flag: {self.GetEnableFlag()}")
         x = round(pos_data.x*1000) * 1000
         y = round(pos_data.y*1000) * 1000
         z = round(pos_data.z*1000) * 1000
@@ -277,10 +278,11 @@ class PiperRosNode(Node):
                 if lens == 7:
                     vel_all = clip(round(joint_data.velocity[6]), 1, 100)
                     self.get_logger().info(f"vel_all: {vel_all}")
-                    self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
+                    # self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
+                    self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD)
                 else:
-                    self.piper.MotionCtrl_2(0x01, 0x01, 30)
-                    # self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD) # FAST MODE >:)
+                    # self.piper.MotionCtrl_2(0x01, 0x01, 30)
+                    self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD) # FAST
             else:
                 self.piper.MotionCtrl_2(0x01, 0x01, 30)
 

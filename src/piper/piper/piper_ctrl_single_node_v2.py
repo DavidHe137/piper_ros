@@ -72,7 +72,7 @@ class PiperRosNodeV2(Node):
         self.piper.ConnectPort()
 
         # Start subscription thread
-        self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
+        # self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
         self.create_subscription(JointState, 'joint_ctrl_single', self.joint_callback, 1)
         self.create_subscription(Bool, 'enable_flag', self.enable_callback, 1)
 
