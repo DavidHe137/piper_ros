@@ -48,7 +48,7 @@ def generate_launch_description():
             'gripper_exist': LaunchConfiguration('gripper_exist'),
         }],
         remappings=[
-            ('joint_ctrl_single', '/joint_states'),
+            ('joint_ctrl_single', '/joint_states_single'), # TODO: change to /joint_states
         ]
     )
 
