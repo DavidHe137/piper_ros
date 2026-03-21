@@ -34,7 +34,9 @@ import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool
 from piper_sdk import C_PiperInterface_V2
+import numpy as np
 
 
 def _wait_enter(prompt: str) -> None:
@@ -81,6 +83,7 @@ class TeleopLoopNode(Node):
         self.preset_joints = list(
             self.get_parameter('preset_joints').get_parameter_value().double_array_value
         )
+
         self.can_mode_timeout = (
             self.get_parameter('can_mode_timeout').get_parameter_value().double_value
         )
@@ -100,6 +103,7 @@ class TeleopLoopNode(Node):
         # Publisher: mirrors the topic published by piper_broadcast_master_v2.
         # The remote follower node subscribes to this.
         self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_states', 1)
+        self.data_collect_pub = self.create_publisher(Bool, 'data_collect', 1)
 
         # Forwarding active flag — controlled by the operator loop thread
         self._forwarding = False
@@ -236,6 +240,10 @@ class TeleopLoopNode(Node):
         zero_joints = [0.0] * 6
         preset_joints_rad = self.preset_joints[:6]
 
+        preset_joints_np = np.array(preset_joints_rad)
+        preset_joints_np = preset_joints_np + np.random.normal(0, 0.1, 6)
+        preset_joints_rad = preset_joints_np.tolist()
+
         # Stage 1: safe neutral position first
         if self.gripper_exist:
             self.piper.GripperCtrl(0, 1000, 0x01, 0x00)
@@ -256,9 +264,15 @@ class TeleopLoopNode(Node):
 
     def _data_collector_begin(self) -> None:
         self.get_logger().info("DATA COLLECTOR BEGIN")
+        msg = Bool()
+        msg.data = True
+        self.data_collect_pub.publish(msg)
 
     def _data_collector_end(self) -> None:
         self.get_logger().info("DATA COLLECTOR END")
+        msg = Bool()
+        msg.data = False
+        self.data_collect_pub.publish(msg)
 
     # ── Forwarding thread ─────────────────────────────────────────────────────
 
@@ -305,7 +319,7 @@ class TeleopLoopNode(Node):
             # ── Step 1: operator disables teach mode; run e-stop exit sequence ─
             _wait_enter(
                 "\n" + "=" * 60 + "\n"
-                "Step 1: Disable teacher mode on the teacher arm.\n"
+                "Step 1: Move the teacher arm to zero, and disable teacher mode.\n"
                 "        Press Enter when teacher mode is disabled."
             )
             try:
