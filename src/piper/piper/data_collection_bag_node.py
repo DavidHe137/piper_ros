@@ -28,9 +28,9 @@ class DataCollectionBagNode(Node):
         self._episode_prefix = self.get_parameter("episode_prefix").value
 
         self._topics = [
-            "/image_raw",
-            "/camera/intel_realsense_d435/color/image_raw",
-            "/camera/intel_realsense_d435/depth/image_rect_raw",
+            "/image_raw", # logitech camera, keeping this just in case
+            "/camera/intel_realsense_d435i_top/color/image_raw",
+            "/camera/intel_realsense_d435i_wrist/color/image_raw",
             "/joint_states_single",
         ]
 
@@ -45,7 +45,6 @@ class DataCollectionBagNode(Node):
         self._is_recording = False
         self._bag_process: Optional[subprocess.Popen] = None
         self._current_bag_path: Optional[Path] = None
-        self._episode_count = 0
 
         self.create_subscription(Bool, self._record_topic, self._record_callback, 10)
 
@@ -96,11 +95,11 @@ class DataCollectionBagNode(Node):
     def _start_recording(self) -> None:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        bag_name = f"{self._episode_prefix}_{self._episode_count:04d}_{timestamp}"
+        bag_name = f"{self._episode_prefix}_{timestamp}"
         bag_path = self._output_dir / bag_name
 
         cmd = ["ros2", "bag", "record", "-o", str(bag_path), *self._topics]
-        self.get_logger().info(f"Starting rosbag for episode {self._episode_count}: {bag_path}")
+        self.get_logger().info(f"Starting rosbag for episode: {bag_path}")
 
         try:
             self._bag_process = subprocess.Popen(
@@ -111,7 +110,6 @@ class DataCollectionBagNode(Node):
             )
             self._current_bag_path = bag_path
             self._is_recording = True
-            self._episode_count += 1
         except Exception as exc:
             self._bag_process = None
             self._is_recording = False
