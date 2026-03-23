@@ -44,6 +44,7 @@ class DataCollectionBagNode(Node):
         self._recording_requested = False
         self._is_recording = False
         self._bag_process: Optional[subprocess.Popen] = None
+        self._current_bag_path: Optional[Path] = None
         self._episode_count = 0
 
         self.create_subscription(Bool, self._record_topic, self._record_callback, 10)
@@ -108,6 +109,7 @@ class DataCollectionBagNode(Node):
                 stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
+            self._current_bag_path = bag_path
             self._is_recording = True
             self._episode_count += 1
         except Exception as exc:
@@ -142,8 +144,16 @@ class DataCollectionBagNode(Node):
         except Exception as exc:
             self.get_logger().error(f"Error while stopping rosbag: {exc}")
         finally:
+            bag_path = self._current_bag_path
             self._bag_process = None
+            self._current_bag_path = None
             self._is_recording = False
+            if bag_path is not None:
+                self.get_logger().info(f"Saved episode to: {bag_path}")
+                try:
+                    subprocess.run(["chmod", "-R", "777", str(bag_path)], check=True)
+                except Exception as exc:
+                    self.get_logger().warning(f"Failed to set permissions on {bag_path}: {exc}")
 
     def destroy_node(self) -> bool:
         if self._is_recording:

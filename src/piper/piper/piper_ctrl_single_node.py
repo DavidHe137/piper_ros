@@ -173,7 +173,7 @@ class PiperRosNode(Node):
         self.joint_states.velocity = [vel_0, vel_1, vel_2, vel_3, vel_4, vel_5]
         self.joint_states.effort = [effort_0, effort_1, effort_2, effort_3, effort_4, effort_5, effort_6]
         # 发布所有消息
-        # self.joint_pub.publish(self.joint_states) # TODO: uncomment this
+        self.joint_pub.publish(self.joint_states)
 
     def PublishArmCtrlAndGripper(self):
         self.joint_ctrl.header.stamp = self.get_clock().now().to_msg()
@@ -276,13 +276,15 @@ class PiperRosNode(Node):
             if not all_zeros:
                 lens = len(joint_data.velocity)
                 if lens == 7:
-                    vel_all = clip(round(joint_data.velocity[6]), 1, 100)
+                    vel_all = joint_data.velocity[6]
+                    if int(vel_all) == 173: # high-follow mode
+                        self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD)
+                    else:
+                        vel_all = clip(round(vel_all), 1, 100)
+                        self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
                     # self.get_logger().info(f"vel_all: {vel_all}")
-                    # self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
-                    self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD)
                 else:
-                    # self.piper.MotionCtrl_2(0x01, 0x01, 30)
-                    self.piper.MotionCtrl_2(0x01, 0x01, 0, 0xAD) # FAST
+                    self.piper.MotionCtrl_2(0x01, 0x01, 30)
             else:
                 self.piper.MotionCtrl_2(0x01, 0x01, 30)
 
