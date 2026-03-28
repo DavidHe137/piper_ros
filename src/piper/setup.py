@@ -28,12 +28,16 @@ setup(
     entry_points={
         'console_scripts': [
             'piper_single_ctrl = piper.piper_ctrl_single_node:main',
+            'piper_single_ctrl_v2 = piper.piper_ctrl_single_node_v2:main',
             'piper_ms_ctrl = piper.piper_start_ms_node:main',
             'piper_read_master = piper.piper_read_master_node:main',
             'piper_broadcast_master = piper.piper_broadcast_master:main',
             'piper_broadcast_master_v2 = piper.piper_broadcast_master_v2:main',
             'piper_quest_teleop = piper.piper_quest_teleop:main',
             'piper_teleop_loop = piper.piper_teleop_loop:main',
+            'piper_data_collect_bag = piper.data_collection_bag_node:main',
+            'piper_client = piper.client_node:main',
+            'piper_test_data = piper.test_data_node:main',
         ],
     },
 )
