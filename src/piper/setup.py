@@ -33,6 +33,8 @@ setup(
             'piper_read_master = piper.piper_read_master_node:main',
             'piper_broadcast_master = piper.piper_broadcast_master:main',
             'piper_data_collect_bag = piper.data_collection_bag_node:main',
+            'piper_client = piper.client_node:main',
+            'piper_test_data = piper.test_data_node:main',
         ],
     },
 )
