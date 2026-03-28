@@ -358,9 +358,13 @@ class TeleopLoopNode(Node):
             self._wait_teach_mode_on()
 
             # ── Step 4: begin data collection + forwarding ────────────────────
-            self._data_collector_begin()
             with self._forwarding_lock:
                 self._forwarding = True
+
+            time.sleep(2)  # let the forwarding thread publish a few messages before data collection starts
+            print("\nStarting data collection...")
+
+            self._data_collector_begin()
 
             # ── Step 5: wait for stop signal ──────────────────────────────────
             _wait_enter("\nRecording started. Press Enter to stop.")
