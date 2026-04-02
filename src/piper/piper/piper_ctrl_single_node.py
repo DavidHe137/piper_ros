@@ -260,12 +260,14 @@ class PiperRosNode(Node):
         for idx, joint_name in enumerate(joint_data.name):
             # self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
             joint_positions[joint_name] = round(joint_data.position[idx] * factor)
-        
+ 
         # 获取第7个关节的位置
         if len(joint_data.position) >= 7:
             # self.get_logger().info(f"joint_7: {joint_data.position[6]}")
             joint_6 = round(joint_data.position[6] * 1000 * 1000)
             joint_6 = joint_6 * self.gripper_val_mutiple
+
+        #self.get_logger().info(f"about to send vel")
 
         # 控制电机速度
         if self.GetEnableFlag():
@@ -284,11 +286,12 @@ class PiperRosNode(Node):
                         self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
                     # self.get_logger().info(f"vel_all: {vel_all}")
                 else:
-                    self.piper.MotionCtrl_2(0x01, 0x01, 30)
+                    self.piper.MotionCtrl_2(0x01, 0x01, 50)
             else:
-                self.piper.MotionCtrl_2(0x01, 0x01, 30)
+                self.piper.MotionCtrl_2(0x01, 0x01, 50)
 
             # 使用关节名称来动态控制关节
+
             self.piper.JointCtrl(
                 joint_positions.get('joint1', 0),
                 joint_positions.get('joint2', 0),
@@ -297,7 +300,7 @@ class PiperRosNode(Node):
                 joint_positions.get('joint5', 0),
                 joint_positions.get('joint6', 0)
             )
-
+            self.get_logger().info(f"joint_pos: {joint_positions}")
             # 夹爪控制
             if self.gripper_exist:
                 if len(joint_data.effort) >= 7:
