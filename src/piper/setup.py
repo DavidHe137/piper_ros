@@ -38,6 +38,7 @@ setup(
             'piper_data_collect_bag = piper.data_collection_bag_node:main',
             'piper_client = piper.client_node:main',
             'piper_test_data = piper.test_data_node:main',
+            'piper_test_client = piper.test_client_node:main',
         ],
     },
 )
