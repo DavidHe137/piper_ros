@@ -6,7 +6,10 @@ from openpi_client.action_chunkers.rtc import InferenceTimeRTCBroker as RTCBroke
 from openpi_client.client import BidirectionalWebsocket
 from openpi_client.schemas import Action, LiberoObservation, Observation
 
+import cv2
 import numpy as np
+
+TARGET_SIZE = (224, 224)
 
 CONTROL_HZ = 1
 
@@ -55,17 +58,24 @@ class ClientNode(Node):
 
     def _update_top_image(self, image: Image) -> None:
         image = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)
+        h = image.shape[0]
+        image = image[:, :h, :]  # left-side square crop
+        image = cv2.resize(image, TARGET_SIZE)
         self.observation.image = image
         self.get_logger().info(f"Received top image with shape: {image.shape}")
 
     def _update_wrist_image(self, image: Image) -> None:
-        image = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)   
+        image = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)
+        h, w = image.shape[:2]
+        start = (w - h) // 2
+        image = image[:, start:start + h, :]  # center square crop
+        image = cv2.resize(image, TARGET_SIZE)
         self.observation.wrist_image = image
         self.get_logger().info(f"Received wrist image with shape: {image.shape}")
     
     def publish_callback(self):
         if all(v is not None for v in self.observation.__dict__.values()):  
-            self.get_logger().info("Observation:" + ", ".join([f"{k}: {type(v)}" for k, v in self.observation.__dict__.items()]))
+            # self.get_logger().info("Observation:" + ", ".join([f"{k}: {type(v)}" for k, v in self.observation.__dict__.items()]))
             action = self.broker.infer(self.observation)
             self.publish_action(action)
             self.step+=1
