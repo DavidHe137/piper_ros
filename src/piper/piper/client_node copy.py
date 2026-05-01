@@ -5,13 +5,11 @@ from copy import deepcopy
 import cv2
 import numpy as np
 import rclpy
-from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import Image, JointState
 
 from openpi_client.action_chunkers.rtc import InferenceTimeRTCBroker as RTCBroker
-from openpi_client.action_chunkers.naive_async import NaiveAsyncBroker
 from openpi_client.client import BidirectionalWebsocket
 from openpi_client.schemas import Action, LiberoObservation
 
@@ -76,37 +74,36 @@ class ClientNode(Node):
             control_hz=self.get_parameter('control_hz').value,
         )
 
-        self.broker = NaiveAsyncBroker(
+        self.broker = RTCBroker(
             ws_client=self.ws_client,
             control_hz=self.get_parameter('control_hz').value,
             execution_horizon=self.get_parameter('execution_horizon').value,
         )
 
-        self.observation = LiberoObservation(state=None, step=0, image=None, wrist_image=None, prompt=self.get_parameter('prompt').value)
-        self.observation_step = 0
         self.action_step = 0 # TODO: use action step on server
         self.prev_observation = LiberoObservation(state=None, step=0, image=None, wrist_image=None, prompt=self.get_parameter('prompt').value)
 
-        # Match default create_subscription QoS (reliable) for broad publisher compatibility.
+        # Latest raw messages cached per topic; synchronized on-demand in publish_callback.
+        self._latest_joint: JointState | None = None
+        self._latest_top: Image | None = None
+        self._latest_wrist: Image | None = None
+
         image_qos = QoSProfile(depth=1)
         joint_qos = QoSProfile(depth=1)
-        self._sub_joint = Subscriber(
-            self, JointState, f'/{ns}/joint_states_single', qos_profile=joint_qos
+        self.create_subscription(
+            JointState, f'/{ns}/joint_states_single',
+            lambda msg: setattr(self, '_latest_joint', msg), joint_qos
         )
-        self._sub_top = Subscriber(
-            self, Image, self.get_parameter('top_image_topic').value, qos_profile=image_qos
+        self.create_subscription(
+            Image, self.get_parameter('top_image_topic').value,
+            lambda msg: setattr(self, '_latest_top', msg), image_qos
         )
-        self._sub_wrist = Subscriber(
-            self, Image, self.get_parameter('wrist_image_topic').value, qos_profile=image_qos
+        self.create_subscription(
+            Image, self.get_parameter('wrist_image_topic').value,
+            lambda msg: setattr(self, '_latest_wrist', msg), image_qos
         )
-        self._observation_sync = ApproximateTimeSynchronizer(
-            [self._sub_joint, self._sub_top, self._sub_wrist],
-            queue_size=int(self.get_parameter('sync_queue_size').value),
-            slop=float(self.get_parameter('sync_slop_sec').value),
-        )
-        self._observation_sync.registerCallback(self._on_synchronized_observation)
 
-        self.get_logger().info("Client node initialized with approximate-time observation sync.")
+        self.get_logger().info("Client node initialized (observation synchronized on-demand in publish_callback).")
 
     def _process_top_image(self, image: Image) -> np.ndarray:
         arr = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)
@@ -121,37 +118,54 @@ class ClientNode(Node):
         arr = arr[:, start : start + h, :]  # center square crop
         return cv2.resize(arr, TARGET_SIZE)
 
-    def _on_synchronized_observation(
-        self, joint_msg: JointState, top_image: Image, wrist_image: Image
-    ) -> None:
-        """Apply joint + both cameras together when headers fall within sync_slop_sec."""
-        self.observation.state = np.array(joint_msg.position.tolist())
-        self.observation.image = self._process_top_image(top_image)
-        self.observation.wrist_image = self._process_wrist_image(wrist_image)
-        self.observation_step += 1
-    
+    def _get_synchronized_observation(self) -> LiberoObservation | None:
+        """Build a synchronized observation from the latest cached messages.
+
+        Returns None (and logs which topics are missing) if any topic has not
+        yet received a message, or if the timestamps of the cached messages
+        diverge by more than sync_slop_sec.
+        """
+        joint_msg = self._latest_joint
+        top_img   = self._latest_top
+        wrist_img = self._latest_wrist
+
+        missing = [name for name, msg in [('joint', joint_msg), ('top_image', top_img), ('wrist_image', wrist_img)] if msg is None]
+        if missing:
+            self.get_logger().info("Waiting for complete observation... missing: " + ", ".join(missing))
+            return None
+
+        slop = float(self.get_parameter('sync_slop_sec').value)
+        stamps = [
+            joint_msg.header.stamp.sec + joint_msg.header.stamp.nanosec * 1e-9,
+            top_img.header.stamp.sec   + top_img.header.stamp.nanosec   * 1e-9,
+            wrist_img.header.stamp.sec + wrist_img.header.stamp.nanosec * 1e-9,
+        ]
+        if max(stamps) - min(stamps) > slop:
+            self.get_logger().info(
+                f"Observation timestamps out of sync (spread {max(stamps)-min(stamps):.3f}s > slop {slop}s), skipping."
+            )
+            return None
+
+        return LiberoObservation(
+            state=np.array(joint_msg.position.tolist()),
+            step=self.step,
+            image=self._process_top_image(top_img),
+            wrist_image=self._process_wrist_image(wrist_img),
+            prompt=self.get_parameter('prompt').value,
+        )
+
     def publish_callback(self):
-        if not all(v is not None for v in self.observation.__dict__.values()):
-            self.get_logger().info("Waiting for complete observation... missing: " + ", ".join([k for k, v in self.observation.__dict__.items() if v is None]))
+        observation = self._get_synchronized_observation()
+        if observation is None:
             return
 
-        # # Don't start executing until the broker has received at least one real chunk
-        # # from the server, so we never act on the initial null (all-zero) action.
-        # if not self.broker.current_action_chunk:
-        #     self.get_logger().info("Waiting for first action chunk from server...")
-        #     self.observation.step = self.step
-        #     self.broker.infer(self.observation)
-        #     self.step += 1
-        #     return
-        # TODO: maybe have two time
-        self.observation.step = self.step
-        action = self.broker.infer(self.observation)
+        # TODO: maybe have two timers
+        action = self.broker.infer(observation)
         self.step += 1
         if self.prev_observation.state is not None:
-            state_diff = self.observation.state - self.prev_observation.state
+            state_diff = observation.state - self.prev_observation.state
             self.get_logger().info(f"State diff: {state_diff}")
-        self.prev_observation = deepcopy(self.observation)
-        # action = self.broker.infer(self.observation)
+        self.prev_observation = deepcopy(observation)
         self.get_logger().info(f"Action: {action}")
         if all(float(x) == 0.0 for x in action.action) or action.action is None or len(action.action) != 7:
             self.get_logger().info("Skipping all-zero action.")

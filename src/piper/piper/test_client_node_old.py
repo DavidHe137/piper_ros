@@ -33,25 +33,6 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 TARGET_SIZE = (224, 224)
 JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 
-offsets = [[0.02321829, 0.00910173, -0.03996214, -0.03830964, 0.10155467, -0.03065713, 0.0],
-            [0.01820654, -0.00352656, -0.00632112, 0.00353667, 0.04040816, -0.03062013, 0.0],
-            [0.01551772, 0.00531139, -0.0099189, -0.08857924, 0.03289094, -0.04199907, 0.0],
-            [0.0214633, 0.00162367, 0.00224904, -0.00127418, 0.07886142, -0.02211866, 0.0],
-            [0.0251082, -0.00635497, -0.02101643, -0.0789244, 0.09792906, -0.09720207, 0.0],
-            [0.01112712, 0.03264597, -0.02738706, -0.01611043, 0.10601071, -0.01252022, 0.0],
-            [0.02140098, -0.00576347, 0.00880733, -0.00593615, 0.02133216, 0.00560446, 0.0],
-            [0.00730359, 0.00740132, -0.04213898, -0.00291651, 0.10787516, -0.02172383, 0.0],
-            [0.01102888, -0.00241522, -0.03314344, -0.01546467, 0.1276725, -0.03068104, 0.0],
-            [0.03264093, 0.02947261, -0.02512171, -0.02812324, 0.05315014, -0.02938591, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [-0.0171232, -0.002284, 0.00153009, -0.09052934, 0.07490137, 0.08260109, 0.0],
-            [0.01038045, 0.00931645, -0.08858023, -0.02868523, 0.2464043, -0.00241596, 0.0],
-            [0.01498489, -0.01462671, -0.02245972, -0.04720494, 0.06598705, -0.01857491, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            ]
-
 
 # ── image transforms (identical to db3_to_lerobot.py / client_node.py) ────────
 
@@ -156,13 +137,7 @@ class TestClientNode(Node):
 
     def wait_for_observation(self) -> LiberoObservation:
         """Block until all observation fields are populated."""
-        def _print(msg: str, **kwargs) -> None:
-            try:
-                print(msg, **kwargs)
-            except (BrokenPipeError, OSError):
-                pass
-
-        _print("Waiting for complete observation...", end="", flush=True)
+        print("Waiting for complete observation...", end="", flush=True)
         required = ("state", "image", "wrist_image")
         while True:
             with self._obs_lock:
@@ -175,10 +150,10 @@ class TestClientNode(Node):
                         wrist_image=self.observation.wrist_image.copy(),
                         prompt=self.observation.prompt,
                     )
-                    _print(" done.")
+                    print(" done.")
                     return obs
             if missing:
-                _print(f"\rWaiting for complete observation... missing: {', '.join(missing)}   ", end="", flush=True)
+                print(f"\rWaiting for complete observation... missing: {', '.join(missing)}   ", end="", flush=True)
             time.sleep(0.1)
 
     def current_state(self) -> np.ndarray:
@@ -201,36 +176,22 @@ class TestClientNode(Node):
         next-frame absolute positions as actions, not deltas), so they are sent
         directly without adding a current-state offset.
         """
-        def _print(msg: str) -> None:
-            try:
-                print(msg, flush=True)
-            except (BrokenPipeError, OSError):
-                pass
-
         dt = 1.0 / control_hz
-        _print(f"  Rolling out {len(actions)} steps on {label} at {control_hz} Hz...")
-        this_offset = offsets[get_station_number() - 1]
+        print(f"  Rolling out {len(actions)} steps on {label} at {control_hz} Hz...")
         for i, action in enumerate(actions):
-            action = action - this_offset
-
             publisher.publish(self._make_joint_msg(list(action)))
             time.sleep(dt)
-            _print(f"    step {i+1}/{len(actions)}: {[f'{v:.3f}' for v in action]}")
-        _print(f"  {label} rollout complete.")
+            print(f"    step {i+1}/{len(actions)}: {[f'{v:.3f}' for v in action]}")
+        print(f"  {label} rollout complete.")
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Initialize rclpy first so it strips ROS-specific args (e.g. __node:=...,
-    # remappings) from sys.argv before argparse sees them.
-    rclpy.init()
-
     parser = argparse.ArgumentParser(description="Sim-validation testing client")
     parser.add_argument("--host", default="https://rohan-bansal--openpi-serve-modalpolicyserver-stable--98f7b0-dev.modal.run")
-    # parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--control-hz", type=float, default=20.0)
+    parser.add_argument("--control-hz", type=float, default=30.0)
     parser.add_argument("--prompt", default="pick up the legos and sort them into the correct bins.")
     parser.add_argument(
         "--top-topic",
@@ -240,53 +201,62 @@ def main() -> None:
         "--wrist-topic",
         default=default_rs_color_topic("intel_realsense_d435i_wrist"),
     )
-    # Use parse_known_args so any residual ROS remapping args don't cause exit(2).
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args()
+
+    rclpy.init()
     node = TestClientNode(
         prompt=args.prompt,
         top_topic=args.top_topic,
         wrist_topic=args.wrist_topic,
     )
 
-    # spin ROS in a background thread so main thread stays free for the loop.
-    # Non-daemon so the process doesn't exit if the main thread hits an error.
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=False)
+    # spin ROS in a background thread so main thread stays free for input()
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
-    def log(msg: str) -> None:
-        """Print, ignoring broken-pipe errors (e.g. when stdout is /dev/null)."""
-        try:
-            print(msg, flush=True)
-        except (BrokenPipeError, OSError):
-            pass
-
-    log(f"Connecting to policy server at {args.host}:{args.port} ...")
+    print(f"Connecting to policy server at {args.host}:{args.port} ...")
     policy = WebsocketClientPolicy(robot_id=f"robot_{get_station_number()}", host=args.host, port=args.port, control_hz=args.control_hz)
-    log("Connected.")
+    print("Connected.")
 
     try:
         while True:
             obs = node.wait_for_observation()
 
-            log("Querying server for action chunk...")
+            # node.show_obs_images(obs)
+            # input("\nObservation images displayed. Press Enter to query the server...")
+
+            print("Querying server for action chunk...")
             result = policy.infer(obs)
             actions = result["actions"]  # (action_horizon, action_dim)
 
-            log(f"\nChunk received: shape={actions.shape}")
-            log(f"  first action: {[f'{v:.3f}' for v in actions[0]]}")
-            log(f"  last  action: {[f'{v:.3f}' for v in actions[-1]]}")
+            print(f"\nChunk received: shape={actions.shape}")
+            print(f"  first action: {[f'{v:.3f}' for v in actions[0]]}")
+            print(f"  last  action: {[f'{v:.3f}' for v in actions[-1]]}")
 
-            # input("rollout? ")
+            # input("Enter to rollout")
 
-            log(f"control_hz: {args.control_hz}")
+            # ans = input('\nType "yes" to roll out in SIM, anything else aborts: ').strip().lower()
+            # if ans != "yes":
+            #     print("Sim rollout aborted.")
+            #     continue
+            # node.rollout(actions, node.sim_pub, "SIM", args.control_hz)
+
+            # ans = input('\nType "yes" to roll out on REAL robot, anything else skips: ').strip().lower()
+            # if ans == "yes":
+            print("control_hz: ", args.control_hz)
             node.rollout(actions, node.real_pub, "REAL", args.control_hz)
+            # else:
+            #     print("Real rollout skipped.")
+
+            # ans = input('\nType "yes" to query another chunk, anything else exits: ').strip().lower()
+            # if ans != "yes":
+            #     break
 
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
-        spin_thread.join(timeout=5)
 
 
 if __name__ == "__main__":
