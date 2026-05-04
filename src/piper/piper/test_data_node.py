@@ -17,46 +17,10 @@ import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import sys
 
+from piper.util.station_util import get_station_number, default_rs_color_topic, get_station_namespace
+
 CONTROL_HZ = 20
 JOINT_NAMES = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'gripper']
-
-# Per-workstation joint offsets (indexed by station_number - 1).
-# Subtracted from every policy action before publishing, matching test_client_node.py.
-offsets = [
-    [0.02321829,  0.00910173, -0.03996214, -0.03830964,  0.10155467, -0.03065713, 0.0],
-    [0.01820654, -0.00352656, -0.00632112,  0.00353667,  0.04040816, -0.03062013, 0.0],
-    [0.01551772,  0.00531139, -0.0099189,  -0.08857924,  0.03289094, -0.04199907, 0.0],
-    [0.0214633,   0.00162367,  0.00224904, -0.00127418,  0.07886142, -0.02211866, 0.0],
-    [0.0251082,  -0.00635497, -0.02101643, -0.0789244,   0.09792906, -0.09720207, 0.0],
-    [0.01112712,  0.03264597, -0.02738706, -0.01611043,  0.10601071, -0.01252022, 0.0],
-    [0.02140098, -0.00576347,  0.00880733, -0.00593615,  0.02133216,  0.00560446, 0.0],
-    [0.00730359,  0.00740132, -0.04213898, -0.00291651,  0.10787516, -0.02172383, 0.0],
-    [0.01102888, -0.00241522, -0.03314344, -0.01546467,  0.1276725,  -0.03068104, 0.0],
-    [0.03264093,  0.02947261, -0.02512171, -0.02812324,  0.05315014, -0.02938591, 0.0],
-    [0.0,         0.0,         0.0,         0.0,          0.0,         0.0,        0.0],
-    [-0.0171232, -0.002284,   0.00153009, -0.09052934,  0.07490137,  0.08260109,  0.0],
-    [0.01038045,  0.00931645, -0.08858023, -0.02868523,  0.2464043,  -0.00241596, 0.0],
-    [0.01498489, -0.01462671, -0.02245972, -0.04720494,  0.06598705, -0.01857491, 0.0],
-    [0.0,         0.0,         0.0,         0.0,          0.0,         0.0,        0.0],
-    [0.0,         0.0,         0.0,         0.0,          0.0,         0.0,        0.0],
-    [0.0,         0.0,         0.0,         0.0,          0.0,         0.0,        0.0],
-]
-
-
-def get_station_number() -> int | None:
-    hostname = socket.gethostname()
-    match = re.search(r'robotics-education-lab(\d+)(?:\..*)?$', hostname)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def _station_offset() -> np.ndarray:
-    """Return the offset array for this workstation, or zeros if unknown."""
-    station = get_station_number()
-    if station is not None and 1 <= station <= len(offsets):
-        return np.array(offsets[station - 1], dtype=np.float64)
-    return np.zeros(7, dtype=np.float64)
 
 
 def load_episode(
@@ -115,10 +79,8 @@ class TestDataNode(Node):
         self.step = 0
 
         station = get_station_number()
-        offset = _station_offset()
         self.get_logger().info(
             f"Station number: {station}  "
-            f"joint offset: {[f'{v:.4f}' for v in offset]}"
         )
 
         if self.use_rtc:
@@ -202,11 +164,10 @@ class TestDataNode(Node):
     # ── shared helper ──────────────────────────────────────────────────────────
 
     def _publish_action(self, action) -> None:
-        corrected = np.asarray(action, dtype=np.float64) - _station_offset()
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = JOINT_NAMES
-        msg.position = [float(x) for x in corrected]
+        msg.position = [float(x) for x in action]
         msg.velocity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float(0xAD)]
         msg.effort = [0.0] * len(JOINT_NAMES)
         self.joint_pub.publish(msg)

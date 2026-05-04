@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# This file controls a single robotic arm node and handles the movement of the robotic arm with a gripper.
+# ROHAN NOTE: this file is used by rollout
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -17,7 +17,9 @@ from geometry_msgs.msg import Pose
 from scipy.spatial.transform import Rotation as R  # For Euler angle to quaternion conversion
 from numpy import clip
 
-from piper.safety_box import box_from_corners, clamp_joint_cmd_if_ee_outside_box
+from piper.util.joint_offsets import get_station_offset
+from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
+from piper.util.safety_box import box_from_corners, clamp_joint_cmd_if_ee_outside_box
 
 
 class PiperRosNode(Node):
@@ -279,7 +281,9 @@ class PiperRosNode(Node):
         # 遍历joint_data.name来映射位置
         for idx, joint_name in enumerate(joint_data.name):
             # self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
-            joint_positions[joint_name] = round(joint_data.position[idx] * factor)
+            this_offset = get_station_offset(get_station_number())
+            joint_positions[joint_name] = round((joint_data.position[idx] - this_offset[idx]) * factor)
+ 
  
         # 获取第7个关节的位置
         if len(joint_data.position) >= 7:

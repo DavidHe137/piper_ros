@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# This file controls a single robotic arm node and handles the movement of the robotic arm with a gripper.
+# ROHAN NOTE: this file is used by data collection
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -19,30 +19,9 @@ from numpy import clip
 import socket
 import re
 
-from piper.safety_box import box_from_corners, clamp_joint_cmd_if_ee_outside_box
-
-offsets = [[0.02321829, 0.00910173, -0.03996214, -0.03830964, 0.10155467, -0.03065713, 0.0],
-            [0.01820654, -0.00352656, -0.00632112, 0.00353667, 0.04040816, -0.03062013, 0.0],
-            [0.01551772, 0.00531139, -0.0099189, -0.08857924, 0.03289094, -0.04199907, 0.0],
-            [0.0214633, 0.00162367, 0.00224904, -0.00127418, 0.07886142, -0.02211866, 0.0],
-            [0.0251082, -0.00635497, -0.02101643, -0.0789244, 0.09792906, -0.09720207, 0.0],
-            [0.01112712, 0.03264597, -0.02738706, -0.01611043, 0.10601071, -0.01252022, 0.0],
-            [0.02140098, -0.00576347, 0.00880733, -0.00593615, 0.02133216, 0.00560446, 0.0],
-            [0.00730359, 0.00740132, -0.04213898, -0.00291651, 0.10787516, -0.02172383, 0.0],
-            [0.01102888, -0.00241522, -0.03314344, -0.01546467, 0.1276725, -0.03068104, 0.0],
-            [0.03264093, 0.02947261, -0.02512171, -0.02812324, 0.05315014, -0.02938591, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [-0.0171232, -0.002284, 0.00153009, -0.09052934, 0.07490137, 0.08260109, 0.0],
-            [0.01038045, 0.00931645, -0.08858023, -0.02868523, 0.2464043, -0.00241596, 0.0],
-            [0.01498489, -0.01462671, -0.02245972, -0.04720494, 0.06598705, -0.01857491, 0.0]]
-
-
-def get_station_number():
-    hostname = socket.gethostname()
-    match = re.search(r'robotics-education-lab(\d+)(?:\..*)?$', hostname)
-    if match:
-        return int(match.group(1))
-    return None
+from piper.util.safety_box import box_from_corners, clamp_joint_cmd_if_ee_outside_box
+from piper.util.joint_offsets import get_station_offset
+from piper.util.station_util import get_station_number
 
 
 class PiperRosNode(Node):
@@ -291,7 +270,7 @@ class PiperRosNode(Node):
         # 遍历joint_data.name来映射位置
         for idx, joint_name in enumerate(joint_data.name):
             # self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
-            this_offset = offsets[get_station_number() - 1]
+            this_offset = get_station_offset(get_station_number())
             joint_positions[joint_name] = round((joint_data.position[idx] - this_offset[idx]) * factor)
  
         # 获取第7个关节的位置

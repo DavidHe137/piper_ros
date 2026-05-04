@@ -15,30 +15,11 @@ from openpi_client.action_chunkers.naive_async import NaiveAsyncBroker
 from openpi_client.client import BidirectionalWebsocket
 from openpi_client.schemas import Action, LiberoObservation
 
+from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
+
 TARGET_SIZE = (224, 224)
 
 CONTROL_HZ = 20
-
-
-def get_station_number():
-    hostname = socket.gethostname()
-    match = re.search(r'robotics-education-lab(\d+)(?:\..*)?$', hostname)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def get_station_namespace():
-    station_number = get_station_number()
-    if station_number is not None:
-        return f'station{station_number}'
-    return 'station'
-
-
-def default_rs_color_topic(camera_node_name: str) -> str:
-    """Absolute color topic under PushRosNamespace(station), e.g. /station11/.../color/image_raw."""
-    ns = get_station_namespace()
-    return f"/{ns}/{camera_node_name}/color/image_raw"
 
 
 class ClientNode(Node):
@@ -135,15 +116,6 @@ class ClientNode(Node):
             self.get_logger().info("Waiting for complete observation... missing: " + ", ".join([k for k, v in self.observation.__dict__.items() if v is None]))
             return
 
-        # # Don't start executing until the broker has received at least one real chunk
-        # # from the server, so we never act on the initial null (all-zero) action.
-        # if not self.broker.current_action_chunk:
-        #     self.get_logger().info("Waiting for first action chunk from server...")
-        #     self.observation.step = self.step
-        #     self.broker.infer(self.observation)
-        #     self.step += 1
-        #     return
-        # TODO: maybe have two time
         self.observation.step = self.step
         action = self.broker.infer(self.observation)
         self.step += 1
