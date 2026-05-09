@@ -55,12 +55,12 @@ class TestDataNode(Node):
         super().__init__('test_data_node')
 
         self.declare_parameter('robot_id', "robot_0")
-        self.declare_parameter('host', "https://rohan-bansal--openpi-serve-modalpolicyserver-stable--98f7b0-dev.modal.run")
+        self.declare_parameter('host', "localhost")
         self.declare_parameter('port', 8080)
         self.declare_parameter('control_hz', CONTROL_HZ)
         self.declare_parameter('execution_horizon', 20)
-        self.declare_parameter('lerobot_repo_id', "solace222/sort-the-legos-into-the-correct-bins-20260427")
-        self.declare_parameter('episode_idx', 0)
+        self.declare_parameter('lerobot_repo_id', "solace222/sort-the-legos-into-the-correct-bins-20260505")
+        self.declare_parameter('episode_idx', 8)
         self.declare_parameter('use_rtc', False)
 
         host = self.get_parameter('host').value
@@ -103,7 +103,8 @@ class TestDataNode(Node):
                 robot_id=robot_id,
                 host=host,
                 port=port,
-                control_hz=control_hz,
+                control_hz=float(control_hz),
+                execution_horizon=execution_horizon,
             )
             self._control_hz = control_hz
             self._execution_horizon = execution_horizon

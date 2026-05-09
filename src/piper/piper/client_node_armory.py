@@ -10,10 +10,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import Image, JointState
 
-from openpi_client.action_chunkers.rtc import InferenceTimeRTCBroker as RTCBroker
-from openpi_client.action_chunkers.naive_async import NaiveAsyncBroker
-from openpi_client.client import BidirectionalWebsocket
-from openpi_client.schemas import Action, LiberoObservation
+from armory_client.action_chunkers.rtc import InferenceTimeRTCBroker as RTCBroker
+from armory_client.action_chunkers.naive_async import NaiveAsyncBroker
+from armory_client.client import BidirectionalWebsocket
+from armory_client.schemas import Action, LiberoObservation
 
 from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
 
@@ -61,6 +61,7 @@ class ClientNode(Node):
             ws_client=self.ws_client,
             control_hz=self.get_parameter('control_hz').value,
             execution_horizon=self.get_parameter('execution_horizon').value,
+            real=True,
         )
 
         self.observation = LiberoObservation(state=None, step=0, image=None, wrist_image=None, prompt=self.get_parameter('prompt').value)
