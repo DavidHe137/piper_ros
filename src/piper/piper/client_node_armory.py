@@ -1,3 +1,4 @@
+import pathlib
 import re
 import socket
 from copy import deepcopy
@@ -13,9 +14,14 @@ from sensor_msgs.msg import Image, JointState
 from armory_client.action_chunkers.rtc import InferenceTimeRTCBroker as RTCBroker
 from armory_client.action_chunkers.naive_async import NaiveAsyncBroker
 from armory_client.client import BidirectionalWebsocket
+from armory_client.runtime.real_saver import RealSaver
 from armory_client.schemas import Action, LiberoObservation
 
-from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
+from piper.util.station_util import (
+    get_station_number,
+    get_station_namespace,
+    default_rs_color_topic,
+)
 
 TARGET_SIZE = (224, 224)
 
@@ -26,78 +32,127 @@ class ClientNode(Node):
     """ROS2 node for the client"""
 
     def __init__(self) -> None:
-        super().__init__('chunx_client')
+        super().__init__("chunx_client")
         # ROS parameters
-        self.declare_parameter('robot_id', f"robot_{get_station_number()}")
-        self.declare_parameter('host', "localhost")
-        self.declare_parameter('port', 8080)
-        self.declare_parameter('control_hz', CONTROL_HZ)
-        self.declare_parameter('execution_horizon', 20)
+        self.declare_parameter("robot_id", f"robot_{get_station_number()}")
+        self.declare_parameter("host", "localhost")
+        self.declare_parameter("port", 8080)
+        self.declare_parameter("control_hz", CONTROL_HZ)
+        self.declare_parameter("execution_horizon", 20)
         self.declare_parameter(
-            'top_image_topic', default_rs_color_topic('intel_realsense_d435i_top')
+            "top_image_topic", default_rs_color_topic("intel_realsense_d435i_top")
         )
         self.declare_parameter(
-            'wrist_image_topic', default_rs_color_topic('intel_realsense_d435i_wrist')
+            "wrist_image_topic", default_rs_color_topic("intel_realsense_d435i_wrist")
         )
-        self.declare_parameter('prompt', "pick up the legos and sort them into the correct bins.")
-        self.declare_parameter('sync_queue_size', 30)
-        self.declare_parameter('sync_slop_sec', 0.1)
+        self.declare_parameter(
+            "prompt", "pick up the legos and sort them into the correct bins."
+        )
+        self.declare_parameter("sync_queue_size", 30)
+        self.declare_parameter("sync_slop_sec", 0.1)
 
         ns = get_station_namespace()
         # Leading / so topics match data_collection_new.launch.py (PushRosNamespace + remap).
-        self.joint_pub = self.create_publisher(JointState, f'/{ns}/joint_states', 1)
-        self.create_timer(1.0 / self.get_parameter('control_hz').value, self.publish_callback)
+        self.joint_pub = self.create_publisher(JointState, f"/{ns}/joint_states", 1)
+        self.create_timer(
+            1.0 / self.get_parameter("control_hz").value, self.publish_callback
+        )
         self.step = 0
 
         self.ws_client = BidirectionalWebsocket(
-            robot_id=self.get_parameter('robot_id').value,
-            host=self.get_parameter('host').value,
-            port=self.get_parameter('port').value,
+            robot_id=self.get_parameter("robot_id").value,
+            host=self.get_parameter("host").value,
+            port=self.get_parameter("port").value,
             api_key=None,
-            control_hz=self.get_parameter('control_hz').value,
+            control_hz=self.get_parameter("control_hz").value,
         )
 
         self.broker = NaiveAsyncBroker(
             ws_client=self.ws_client,
-            control_hz=self.get_parameter('control_hz').value,
-            execution_horizon=self.get_parameter('execution_horizon').value,
+            control_hz=self.get_parameter("control_hz").value,
+            execution_horizon=self.get_parameter("execution_horizon").value,
             real=True,
         )
 
-        self.observation = LiberoObservation(state=None, step=0, image=None, wrist_image=None, prompt=self.get_parameter('prompt').value)
+        # RealSaver: per-step trajectory capture so the orchestrator can
+        # SFTP the data back and run calculate_metrics on it.
+        self.declare_parameter("save_data", True)
+        self.declare_parameter("save_video", False)
+        self.declare_parameter("data_dir", "/datasets/armory_episodes")
+
+        self._saver = None
+        if bool(self.get_parameter("save_data").value):
+            self._saver = RealSaver(
+                out_dir=pathlib.Path(self.get_parameter("data_dir").value),
+                robot_id=str(self.get_parameter("robot_id").value),
+                prompt=str(self.get_parameter("prompt").value),
+                control_hz=int(self.get_parameter("control_hz").value),
+                action_chunk_broker=self.broker,
+                save_video=bool(self.get_parameter("save_video").value),
+            )
+            self._saver.on_episode_start()
+            self.get_logger().info(
+                f"RealSaver enabled; writing to {self.get_parameter('data_dir').value}"
+            )
+
+        self.observation = LiberoObservation(
+            state=None,
+            step=0,
+            image=None,
+            wrist_image=None,
+            prompt=self.get_parameter("prompt").value,
+        )
         self.observation_step = 0
-        self.action_step = 0 # TODO: use action step on server
-        self.prev_observation = LiberoObservation(state=None, step=0, image=None, wrist_image=None, prompt=self.get_parameter('prompt').value)
+        self.action_step = 0  # TODO: use action step on server
+        self.prev_observation = LiberoObservation(
+            state=None,
+            step=0,
+            image=None,
+            wrist_image=None,
+            prompt=self.get_parameter("prompt").value,
+        )
 
         # Match default create_subscription QoS (reliable) for broad publisher compatibility.
         image_qos = QoSProfile(depth=1)
         joint_qos = QoSProfile(depth=1)
         self._sub_joint = Subscriber(
-            self, JointState, f'/{ns}/joint_states_single', qos_profile=joint_qos
+            self, JointState, f"/{ns}/joint_states_single", qos_profile=joint_qos
         )
         self._sub_top = Subscriber(
-            self, Image, self.get_parameter('top_image_topic').value, qos_profile=image_qos
+            self,
+            Image,
+            self.get_parameter("top_image_topic").value,
+            qos_profile=image_qos,
         )
         self._sub_wrist = Subscriber(
-            self, Image, self.get_parameter('wrist_image_topic').value, qos_profile=image_qos
+            self,
+            Image,
+            self.get_parameter("wrist_image_topic").value,
+            qos_profile=image_qos,
         )
         self._observation_sync = ApproximateTimeSynchronizer(
             [self._sub_joint, self._sub_top, self._sub_wrist],
-            queue_size=int(self.get_parameter('sync_queue_size').value),
-            slop=float(self.get_parameter('sync_slop_sec').value),
+            queue_size=int(self.get_parameter("sync_queue_size").value),
+            slop=float(self.get_parameter("sync_slop_sec").value),
         )
         self._observation_sync.registerCallback(self._on_synchronized_observation)
 
-        self.get_logger().info("Client node initialized with approximate-time observation sync.")
+        self.get_logger().info(
+            "Client node initialized with approximate-time observation sync."
+        )
 
     def _process_top_image(self, image: Image) -> np.ndarray:
-        arr = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)
+        arr = np.frombuffer(image.data, dtype=np.uint8).reshape(
+            image.height, image.width, -1
+        )
         h = arr.shape[0]
         arr = arr[:, :h, :]  # left-side square crop
         return cv2.resize(arr, TARGET_SIZE)
 
     def _process_wrist_image(self, image: Image) -> np.ndarray:
-        arr = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.width, -1)
+        arr = np.frombuffer(image.data, dtype=np.uint8).reshape(
+            image.height, image.width, -1
+        )
         h, w = arr.shape[:2]
         start = (w - h) // 2
         arr = arr[:, start : start + h, :]  # center square crop
@@ -111,10 +166,15 @@ class ClientNode(Node):
         self.observation.image = self._process_top_image(top_image)
         self.observation.wrist_image = self._process_wrist_image(wrist_image)
         self.observation_step += 1
-    
+
     def publish_callback(self):
         if not all(v is not None for v in self.observation.__dict__.values()):
-            self.get_logger().info("Waiting for complete observation... missing: " + ", ".join([k for k, v in self.observation.__dict__.items() if v is None]))
+            self.get_logger().info(
+                "Waiting for complete observation... missing: "
+                + ", ".join(
+                    [k for k, v in self.observation.__dict__.items() if v is None]
+                )
+            )
             return
 
         self.observation.step = self.step
@@ -126,20 +186,51 @@ class ClientNode(Node):
         self.prev_observation = deepcopy(self.observation)
         # action = self.broker.infer(self.observation)
         self.get_logger().info(f"Action: {action}")
-        if all(float(x) == 0.0 for x in action.action) or action.action is None or len(action.action) != 7:
+        if (
+            all(float(x) == 0.0 for x in action.action)
+            or action.action is None
+            or len(action.action) != 7
+        ):
             self.get_logger().info("Skipping all-zero action.")
             return
         self.publish_action(action)
+        if self._saver is not None:
+            try:
+                self._saver.on_step(deepcopy(self.observation), action)
+            except Exception as e:
+                self.get_logger().warning(f"RealSaver.on_step failed: {e}")
 
     def publish_action(self, action: Action) -> None:
         self.get_logger().info(f"Publishing action: {action}")
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6', 'gripper']
+        msg.name = [
+            "joint1",
+            "joint2",
+            "joint3",
+            "joint4",
+            "joint5",
+            "joint6",
+            "gripper",
+        ]
         msg.position = [float(x) for x in action.action]
         msg.velocity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float(0xAD)]
         msg.effort = [0.0] * 7
         self.joint_pub.publish(msg)
+
+    def destroy_node(self):
+        # Flush RealSaver before super tears down the rclpy machinery so the
+        # logger is still usable while we wait for the background executor.
+        if self._saver is not None:
+            try:
+                self._saver.on_episode_end()
+                self._saver.close()
+                self.get_logger().info("RealSaver flushed.")
+            except Exception as e:
+                self.get_logger().warning(f"RealSaver flush failed: {e}")
+            self._saver = None
+        super().destroy_node()
+
 
 def main(args=None):
     rclpy.init(args=args)
