@@ -29,8 +29,8 @@ class DataCollectionBagNode(Node):
         self.declare_parameter(
             "topics_hz",
             [
-                "/camera/intel_realsense_d435i_top/color/image_raw", "30.0",
-                "/camera/intel_realsense_d435i_wrist/color/image_raw", "30.0",
+                "/camera/intel_realsense_d435i_top/color/image_raw", "60.0",
+                "/camera/intel_realsense_d435i_wrist/color/image_raw", "60.0",
                 "/follower_joint_states", "200.0",
                 "/master_joint_states", "200.0",
                 "/follower_eef_pose", "200.0",

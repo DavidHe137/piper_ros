@@ -27,8 +27,8 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 
-from openpi_client.schemas import LiberoObservation
-from openpi_client.websocket_client_policy import WebsocketClientPolicy
+from armory_client.schemas import LiberoObservation
+from armory_client.websocket_client_policy import WebsocketClientPolicy
 
 from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
 
