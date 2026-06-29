@@ -41,10 +41,12 @@ class ClientNode(Node):
         super().__init__("chunx_client", **init_kwargs)
         # ROS parameters
         self.declare_parameter("robot_id", f"robot_{get_station_number()}")
-        self.declare_parameter("host", "https://vvla--armory-serve-modalpolicyserver-stable-endpoint-dev.modal.run/")
+        # self.declare_parameter("host", "https://vvla--armory-serve-modalpolicyserver-stable-endpoint-dev.modal.run/")
+        self.declare_parameter("host", "localhost") # if using skynet
         self.declare_parameter("port", 8080)
         self.declare_parameter("control_hz", 25.0)
-        self.declare_parameter("execution_horizon", 20)
+        self.declare_parameter("min_execution_horizon", 5)
+        self.declare_parameter("max_execution_horizon", 20)
         self.declare_parameter(
             "top_image_topic", default_rs_color_topic("intel_realsense_d435i_top")
         )
@@ -65,7 +67,12 @@ class ClientNode(Node):
         )
         self.step = 0
 
-        self.get_logger().info(f"Prompt: {self.get_parameter('prompt').value}, Control Hz: {self.get_parameter('control_hz').value}, Execution Horizon: {self.get_parameter('execution_horizon').value}")
+        self.get_logger().info(
+            f"Prompt: {self.get_parameter('prompt').value}, "
+            f"Control Hz: {self.get_parameter('control_hz').value}, "
+            f"Min Execution Horizon: {self.get_parameter('min_execution_horizon').value}, "
+            f"Max Execution Horizon: {self.get_parameter('max_execution_horizon').value}"
+        )
 
         self.ws_client = BidirectionalWebsocket(
             robot_id=self.get_parameter("robot_id").value,
@@ -75,10 +82,11 @@ class ClientNode(Node):
             control_hz=self.get_parameter("control_hz").value,
         )
 
-        self.broker = RTCBroker(
+        self.broker = NaiveAsyncBroker(
             ws_client=self.ws_client,
             control_hz=self.get_parameter("control_hz").value,
-            execution_horizon=self.get_parameter("execution_horizon").value,
+            min_execution_horizon=self.get_parameter("min_execution_horizon").value,
+            max_execution_horizon=self.get_parameter("max_execution_horizon").value,
             real=True,
         )
 
@@ -279,13 +287,22 @@ def main(args=None) -> None:
         help="Prompt for the client. Overrides any ros-args param if set.",
     )
     parser.add_argument(
-        "--execution-horizon",
+        "--min-execution-horizon",
         type=int,
         # MUST stay None when the flag is absent: matches --control-hz so we
         # only build a Parameter override when explicitly given.
         default=None,
         metavar="N",
-        help="Action chunk execution horizon (int). Overrides any ros-args param if set.",
+        help="Min action-chunk execution horizon (int). Overrides any ros-args param if set.",
+    )
+    parser.add_argument(
+        "--max-execution-horizon",
+        type=int,
+        # MUST stay None when the flag is absent: matches --control-hz so we
+        # only build a Parameter override when explicitly given.
+        default=None,
+        metavar="N",
+        help="Max action-chunk execution horizon (int). Overrides any ros-args param if set.",
     )
     parser.add_argument(
         "--barrier",
@@ -307,8 +324,18 @@ def main(args=None) -> None:
     parsed, _unknown = parser.parse_known_args(filtered[1:])
     if parsed.control_hz is not None and parsed.control_hz <= 0:
         parser.error("--control-hz must be positive")
-    if parsed.execution_horizon is not None and parsed.execution_horizon <= 0:
-        parser.error("--execution-horizon must be positive")
+    if parsed.min_execution_horizon is not None and parsed.min_execution_horizon <= 0:
+        parser.error("--min-execution-horizon must be positive")
+    if parsed.max_execution_horizon is not None and parsed.max_execution_horizon <= 0:
+        parser.error("--max-execution-horizon must be positive")
+    if (
+        parsed.min_execution_horizon is not None
+        and parsed.max_execution_horizon is not None
+        and parsed.min_execution_horizon > parsed.max_execution_horizon
+    ):
+        parser.error(
+            "--min-execution-horizon must be <= --max-execution-horizon"
+        )
 
     rclpy.init(args=argv)
 
@@ -331,12 +358,20 @@ def main(args=None) -> None:
                 str(parsed.prompt),
             )
         )
-    if parsed.execution_horizon is not None:
+    if parsed.min_execution_horizon is not None:
         override_params.append(
             Parameter(
-                "execution_horizon",
+                "min_execution_horizon",
                 Parameter.Type.INTEGER,
-                int(parsed.execution_horizon),
+                int(parsed.min_execution_horizon),
+            )
+        )
+    if parsed.max_execution_horizon is not None:
+        override_params.append(
+            Parameter(
+                "max_execution_horizon",
+                Parameter.Type.INTEGER,
+                int(parsed.max_execution_horizon),
             )
         )
     if override_params:
