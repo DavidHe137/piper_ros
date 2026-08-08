@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*-coding:utf8-*-
-# This file controls a single robotic arm node and handles the movement of the robotic arm with a gripper.
+# ROHAN NOTE: this file is used by rollout
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -17,6 +17,10 @@ from geometry_msgs.msg import Pose
 from scipy.spatial.transform import Rotation as R  # For Euler angle to quaternion conversion
 from numpy import clip
 
+from piper.util.joint_offsets import get_station_offset
+from piper.util.station_util import get_station_number, get_station_namespace, default_rs_color_topic
+from piper.util.safety_box import box_from_corners, clamp_joint_cmd_if_ee_outside_box
+
 
 class PiperRosNode(Node):
     """ROS2 node for the robotic arm"""
@@ -28,6 +32,9 @@ class PiperRosNode(Node):
         self.declare_parameter('auto_enable', False)
         self.declare_parameter('gripper_exist', True)
         self.declare_parameter('gripper_val_mutiple', 1)
+        self.declare_parameter('safety_box_enable', True)
+        self.declare_parameter('safety_box_corner_a', [0.057, 0.3, 0.092])
+        self.declare_parameter('safety_box_corner_b', [0.611, -0.275, 0.607])
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
@@ -35,10 +42,25 @@ class PiperRosNode(Node):
         self.gripper_val_mutiple = self.get_parameter('gripper_val_mutiple').get_parameter_value().integer_value
         self.gripper_val_mutiple = max(0, min(self.gripper_val_mutiple, 10))
 
+        self._safety_box_enable = self.get_parameter('safety_box_enable').get_parameter_value().bool_value
+        corner_a = list(self.get_parameter('safety_box_corner_a').get_parameter_value().double_array_value)
+        corner_b = list(self.get_parameter('safety_box_corner_b').get_parameter_value().double_array_value)
+        if len(corner_a) != 3 or len(corner_b) != 3:
+            self.get_logger().warning('safety_box_corner_a and safety_box_corner_b must each have 3 elements; disabling safety box.')
+            self._safety_box_enable = False
+            self._safety_box_min = (0.0, 0.0, 0.0)
+            self._safety_box_max = (0.0, 0.0, 0.0)
+        else:
+            self._safety_box_min, self._safety_box_max = box_from_corners(corner_a, corner_b)
+        self._safety_box_log_last_ns = 0
+
         self.get_logger().info(f"can_port is {self.can_port}")
         self.get_logger().info(f"auto_enable is {self.auto_enable}")
         self.get_logger().info(f"gripper_exist is {self.gripper_exist}")
         self.get_logger().info(f"gripper_val_mutiple is {self.gripper_val_mutiple}")
+        self.get_logger().info(
+            f"safety_box_enable={self._safety_box_enable} min={self._safety_box_min} max={self._safety_box_max}"
+        )
         # Publishers
         self.joint_pub = self.create_publisher(JointState, 'joint_states_single', 1) 
         self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_ctrl', 1)
@@ -259,7 +281,9 @@ class PiperRosNode(Node):
         # 遍历joint_data.name来映射位置
         for idx, joint_name in enumerate(joint_data.name):
             # self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
-            joint_positions[joint_name] = round(joint_data.position[idx] * factor)
+            this_offset = get_station_offset(get_station_number())
+            joint_positions[joint_name] = round((joint_data.position[idx] - this_offset[idx]) * factor)
+ 
  
         # 获取第7个关节的位置
         if len(joint_data.position) >= 7:
@@ -290,6 +314,21 @@ class PiperRosNode(Node):
             else:
                 self.piper.MotionCtrl_2(0x01, 0x01, 50)
 
+            joint_positions, safety_clamped = clamp_joint_cmd_if_ee_outside_box(
+                self.piper,
+                joint_positions,
+                self._safety_box_enable,
+                self._safety_box_min,
+                self._safety_box_max,
+            )
+            if safety_clamped:
+                now_ns = self.get_clock().now().nanoseconds
+                if now_ns - self._safety_box_log_last_ns > 1_000_000_000:
+                    self.get_logger().warning(
+                        'End effector outside safety box; clamping arm joint commands to current feedback.'
+                    )
+                    self._safety_box_log_last_ns = now_ns
+
             # 使用关节名称来动态控制关节
 
             self.piper.JointCtrl(
@@ -300,7 +339,7 @@ class PiperRosNode(Node):
                 joint_positions.get('joint5', 0),
                 joint_positions.get('joint6', 0)
             )
-            self.get_logger().info(f"joint_pos: {joint_positions}")
+            # self.get_logger().info(f"joint_pos: {joint_positions}")
             # 夹爪控制
             if self.gripper_exist:
                 if len(joint_data.effort) >= 7:

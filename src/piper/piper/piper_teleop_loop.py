@@ -31,24 +31,34 @@ import os
 import threading
 import time
 
+import subprocess
+
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from geometry_msgs.msg import Pose
 from std_msgs.msg import Bool
 from piper_sdk import C_PiperInterface_V2
-import numpy as np
+import math
+from scipy.spatial.transform import Rotation as R  # For Euler angle to quaternion conversion
 
 
-def _wait_enter(prompt: str) -> None:
-    """Print prompt and wait for Enter, reading from /dev/tty so that the
-    call works correctly whether the process is started via ros2 run or
-    ros2 launch (which redirects stdin away from the terminal)."""
+def _wait_enter(prompt: str) -> str:
+    """Print prompt and wait for a line of input from the terminal.
+
+    Returns the stripped line the operator typed.  Reading from /dev/tty means
+    the call works whether the process is started via ros2 run or ros2 launch
+    (which redirects stdin away from the terminal).
+
+    Operators can type 'q' before Enter to signal a bad/discard demo.
+    """
     print(prompt, flush=True)
     try:
         with open('/dev/tty', 'r') as tty:
-            tty.readline()
+            return tty.readline().strip().lower()
     except OSError:
-        input()
+        return input().strip().lower()
 
 
 # Unit conversion constants matching piper_broadcast_master_v2
@@ -68,6 +78,10 @@ class TeleopLoopNode(Node):
     def __init__(self) -> None:
         super().__init__('piper_teleop_loop')
 
+        self.declare_parameter('discard_topic', '/data_discard')
+        self.declare_parameter('top_image_topic', '/camera/intel_realsense_d435i_top/color/image_raw')
+        self.declare_parameter('wrist_image_topic', '/camera/intel_realsense_d435i_wrist/color/image_raw')
+        self.declare_parameter('viewer_height', 480)
         self.declare_parameter('can_port', 'can0')
         self.declare_parameter('gripper_exist', True)
         self.declare_parameter('move_speed', 0xAD) # 1-100, passed to MotionCtrl_2 for follower movement, will be high-follow mode if 0xAD
@@ -79,6 +93,10 @@ class TeleopLoopNode(Node):
         # Speed used when resetting the follower to preset/zero (slower for safety)
         self.declare_parameter('preset_speed', 30)
 
+        self._discard_topic = self.get_parameter('discard_topic').get_parameter_value().string_value
+        self._top_topic = self.get_parameter('top_image_topic').get_parameter_value().string_value
+        self._wrist_topic = self.get_parameter('wrist_image_topic').get_parameter_value().string_value
+        self._viewer_height = self.get_parameter('viewer_height').get_parameter_value().integer_value
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.gripper_exist = self.get_parameter('gripper_exist').get_parameter_value().bool_value
         self.move_speed = self.get_parameter('move_speed').get_parameter_value().integer_value
@@ -106,8 +124,10 @@ class TeleopLoopNode(Node):
 
         # Publisher: mirrors the topic published by piper_broadcast_master_v2.
         # The remote follower node subscribes to this.
-        self.joint_ctrl_pub = self.create_publisher(JointState, 'joint_states', 1)
+        self.joint_ctrl_pub = self.create_publisher(JointState, 'master_joint_states', 1)
+        self.end_pose_pub = self.create_publisher(Pose, 'master_eef_pose', 1)
         self.data_collect_pub = self.create_publisher(Bool, 'data_collect', 1)
+        self.data_discard_pub = self.create_publisher(Bool, self._discard_topic, 1)
 
         # Forwarding active flag — controlled by the operator loop thread
         self._forwarding = False
@@ -121,6 +141,58 @@ class TeleopLoopNode(Node):
         # High-frequency publish thread
         self._fwd_thread = threading.Thread(target=self._forward_thread, daemon=True)
         self._fwd_thread.start()
+
+        # ── Camera viewer ────────────────────────────────────────────────────
+        self._viewer_procs: list[subprocess.Popen] = []
+        self._viewer_thread = threading.Thread(target=self._camera_viewer, daemon=True)
+        self._viewer_thread.start()
+
+    # ── Camera viewer ─────────────────────────────────────────────────────────
+
+    def _camera_viewer(self) -> None:
+        """Launch one rqt_image_view per camera topic as side-by-side windows.
+
+        Skips gracefully if no DISPLAY is available or rqt_image_view is not
+        installed.  The viewer processes are terminated when the node shuts down.
+        """
+        if not os.environ.get('DISPLAY'):
+            self.get_logger().warning(
+                "No DISPLAY set — camera viewer disabled."
+            )
+            return
+
+        env = os.environ.copy()
+        viewers = [
+            ("TOP",   self._top_topic),
+            ("WRIST", self._wrist_topic),
+        ]
+        for label, topic in viewers:
+            try:
+                proc = subprocess.Popen(
+                    ["ros2", "run", "rqt_image_view", "rqt_image_view", topic],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._viewer_procs.append(proc)
+                self.get_logger().info(f"Camera viewer launched for {label}: {topic}")
+            except FileNotFoundError:
+                self.get_logger().warning(
+                    "rqt_image_view not found — camera viewer disabled. "
+                    "Install with: apt install ros-$ROS_DISTRO-rqt-image-view"
+                )
+                return
+
+        # Wait until the node shuts down, then clean up viewer processes
+        while rclpy.ok():
+            time.sleep(1.0)
+
+        for proc in self._viewer_procs:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3.0)
+            except Exception:
+                pass
 
     # ── Joint position helper ─────────────────────────────────────────────────
 
@@ -201,12 +273,14 @@ class TeleopLoopNode(Node):
     def _move_and_stream(self, target_joints_rad: list, label: str,
                          settle_timeout: float = 15.0,
                          speed: int | None = None) -> None:
-        """Command the teacher arm to a target position (radians) and stream
-        its actual joint positions to the follower on joint_ctrl at 200 Hz
+        """Command the teacher arm to a target position (radians) and wait
         until it arrives or the timeout expires.
 
-        ``speed`` controls velocity[6] sent to the follower (1-100).  Defaults
-        to ``self.move_speed`` when None.
+        Does NOT publish to the follower — the follower should stay put
+        while the teacher resets to the start pose.  Follower commands only
+        flow via _forward_thread once _forwarding is set to True.
+
+        ``speed`` controls the teacher arm's motion speed (1-100).
         """
         RAD_TO_RAW = 57324.840764   # millidegrees per radian
         arrival_threshold = 0.05    # rad per-joint tolerance
@@ -226,16 +300,9 @@ class TeleopLoopNode(Node):
 
         deadline = time.time() + settle_timeout
         while time.time() < deadline:
-            self._publish_teacher_joints(speed=speed)
             pos = self._get_pos()
             if all(abs(pos[i] - target_joints_rad[i]) < arrival_threshold for i in range(6)):
                 break
-            time.sleep(dt)
-
-        # Extra streaming to let the follower fully settle
-        settle_extra = time.time() + 0.5
-        while time.time() < settle_extra:
-            self._publish_teacher_joints(speed=speed)
             time.sleep(dt)
 
         self.get_logger().info(f"Teacher arm reached {label}.")
@@ -252,7 +319,7 @@ class TeleopLoopNode(Node):
         preset_joints_rad = self.preset_joints[:6]
 
         preset_joints_np = np.array(preset_joints_rad)
-        preset_joints_np = preset_joints_np + np.random.normal(0, 0.1, 6)
+        preset_joints_np = preset_joints_np + np.random.normal(0, 0.05, 6)
         preset_joints_rad = preset_joints_np.tolist()
 
         # Stage 1: safe neutral position first
@@ -278,6 +345,13 @@ class TeleopLoopNode(Node):
         msg = Bool()
         msg.data = True
         self.data_collect_pub.publish(msg)
+
+    def _data_collector_discard(self) -> None:
+        """Signal the bag node to delete the current episode on stop."""
+        self.get_logger().info("DATA COLLECTOR DISCARD — episode will be deleted")
+        msg = Bool()
+        msg.data = True
+        self.data_discard_pub.publish(msg)
 
     def _data_collector_end(self) -> None:
         self.get_logger().info("DATA COLLECTOR END")
@@ -326,6 +400,23 @@ class TeleopLoopNode(Node):
             msg.effort = [0.0] * 7
             self.joint_ctrl_pub.publish(msg)
 
+            endpos = Pose()
+            endpos.position.x = self.piper.GetArmEndPoseMsgs().end_pose.X_axis / 1000000
+            endpos.position.y = self.piper.GetArmEndPoseMsgs().end_pose.Y_axis / 1000000
+            endpos.position.z = self.piper.GetArmEndPoseMsgs().end_pose.Z_axis / 1000000
+            roll = self.piper.GetArmEndPoseMsgs().end_pose.RX_axis / 1000
+            pitch = self.piper.GetArmEndPoseMsgs().end_pose.RY_axis / 1000
+            yaw = self.piper.GetArmEndPoseMsgs().end_pose.RZ_axis / 1000
+            roll = math.radians(roll)
+            pitch = math.radians(pitch)
+            yaw = math.radians(yaw)
+            quaternion = R.from_euler('xyz', [roll, pitch, yaw]).as_quat()
+            endpos.orientation.x = quaternion[0]
+            endpos.orientation.y = quaternion[1]
+            endpos.orientation.z = quaternion[2]
+            endpos.orientation.w = quaternion[3]
+            self.end_pose_pub.publish(endpos)
+
         except Exception as exc:
             self.get_logger().warn(f"Publish error: {exc}")
 
@@ -367,13 +458,21 @@ class TeleopLoopNode(Node):
             self._data_collector_begin()
 
             # ── Step 5: wait for stop signal ──────────────────────────────────
-            _wait_enter("\nRecording started. Press Enter to stop.")
+            key = _wait_enter(
+                "\nRecording started. Press Enter to save, or type 'q' + Enter to discard."
+            )
 
             # ── Step 6: end data collection + stop forwarding ─────────────────
             with self._forwarding_lock:
                 self._forwarding = False
+
+            discard = key == 'q'
+            if discard:
+                print("Bad demo flagged — discarding episode.", flush=True)
+                self._data_collector_discard()
+
             self._data_collector_end()
-            print("Recording ended.")
+            print(f"Recording {'discarded' if discard else 'saved'}.", flush=True)
 
             # Loop back to step 1
 
