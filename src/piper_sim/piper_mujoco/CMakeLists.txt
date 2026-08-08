@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(piper_mujoco)
 
 # 设置 CMake 的编译选项

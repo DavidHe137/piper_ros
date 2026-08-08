@@ -31,6 +31,21 @@ def generate_launch_description():
         description='Speed percentage used when resetting follower to zero/preset (1-100). '
                     'Lower than move_speed to avoid sudden fast motion.',
     )
+    top_image_topic_arg = DeclareLaunchArgument(
+        'top_image_topic',
+        default_value='/camera/intel_realsense_d435i_top/color/image_raw',
+        description='ROS topic for the top camera color image.',
+    )
+    wrist_image_topic_arg = DeclareLaunchArgument(
+        'wrist_image_topic',
+        default_value='/camera/intel_realsense_d435i_wrist/color/image_raw',
+        description='ROS topic for the wrist camera color image.',
+    )
+    viewer_height_arg = DeclareLaunchArgument(
+        'viewer_height',
+        default_value='480',
+        description='Height in pixels for each camera panel in the viewer window.',
+    )
 
     teleop_loop_node = Node(
         package='piper',
@@ -43,6 +58,9 @@ def generate_launch_description():
             'move_speed': LaunchConfiguration('move_speed'),
             'can_mode_timeout': LaunchConfiguration('can_mode_timeout'),
             'preset_speed': LaunchConfiguration('preset_speed'),
+            'top_image_topic': LaunchConfiguration('top_image_topic'),
+            'wrist_image_topic': LaunchConfiguration('wrist_image_topic'),
+            'viewer_height': LaunchConfiguration('viewer_height'),
         }],
     )
 
@@ -52,5 +70,8 @@ def generate_launch_description():
         move_speed_arg,
         can_mode_timeout_arg,
         preset_speed_arg,
+        top_image_topic_arg,
+        wrist_image_topic_arg,
+        viewer_height_arg,
         teleop_loop_node,
     ])
